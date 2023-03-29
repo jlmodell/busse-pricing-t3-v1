@@ -3,8 +3,8 @@ import Head from "next/head";
 import { useRouter } from "next/router";
 import { useEffect } from "react";
 
+import ContractViewSmall from "~/components/ContractViewSmall";
 import { api } from "~/utils/api";
-import type { PricingAgreement } from "~/server/api/routers/contracts";
 
 const ContractPage: NextPage = () => {
   const router = useRouter();
@@ -18,7 +18,15 @@ const ContractPage: NextPage = () => {
 
   // eslint-disable-next-line @typescript-eslint/require-await
   const handleSetProcessedFalse = () => {
-    mutation.mutate({ contract: contract as string });
+    try {
+      mutation.mutate({ contract: contract as string });
+      contract_query.refetch();
+    } catch (error) {
+      console.error(error);
+      alert(
+        "Something went wrong processing this contract again. Please try again."
+      );
+    }
   };
 
   useEffect(() => {
@@ -71,7 +79,7 @@ const ContractPage: NextPage = () => {
                     <tr className="text-center">
                       <td>
                         {contract_query.data.contractstart.toLocaleDateString()}{" "}
-                        - {contract_query.data.contractend.toLocaleDateString()}
+                        →{contract_query.data.contractend.toLocaleDateString()}
                       </td>
                       <td>
                         {contract_query.data.distributor_fee?.toFixed(2)}%
@@ -89,10 +97,39 @@ const ContractPage: NextPage = () => {
                   </tbody>
                 </table>
               </div>
+
+              <div className="flex w-[95%] flex-col items-center justify-center gap-4 rounded-xl bg-white/10 p-4 text-white">
+                <table className="w-[95%] table-fixed text-xs font-extralight md:w-full md:text-lg">
+                  <thead>
+                    <tr className="w-[95%] md:w-full">
+                      <th className="w-1/2">Sales Volume</th>
+                      <th className="w-1/2">Sales Dollars</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="text-center">
+                      <td>
+                        {contract_query.data.period_total_sales_volume?.toLocaleString(
+                          "en-US",
+                          { minimumFractionDigits: 0 }
+                        )}{" "}
+                        CS
+                      </td>
+                      <td>
+                        ${" "}
+                        {(
+                          (contract_query.data.period_total_sales ?? 0) +
+                          (contract_query.data.period_total_rebates ?? 0)
+                        ).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
           {contract_query.data?.pricingagreements?.map((pa, idx) => (
-            <SmallContractView pa={pa} key={idx} />
+            <ContractViewSmall pa={pa} key={idx} />
           ))}
         </div>
       </main>
@@ -101,36 +138,3 @@ const ContractPage: NextPage = () => {
 };
 
 export default ContractPage;
-
-const SmallContractView = ({ pa }: { pa: PricingAgreement }) => {
-  return (
-    <div className="flex w-[95%] flex-col items-center justify-center gap-2 rounded-xl bg-white/10 p-4 text-white hover:bg-white/20 md:max-w-2xl md:gap-4">
-      <div className="grid w-full grid-cols-2 place-items-center">
-        <h3 className="text-sm font-bold md:text-2xl">Item</h3>
-        <p className="text-sm font-extralight">{pa.item}</p>
-        <h3 className="text-sm font-bold md:text-2xl">Weight</h3>
-        <p className="text-sm font-extralight">{pa.weight?.toFixed(0)} lb.</p>
-        <h3 className="text-sm font-bold md:text-2xl">Price</h3>
-        <p className="text-sm font-extralight">$ {pa.price.toFixed(2)}</p>
-        <h3 className="text-sm font-bold md:text-2xl">Chargebacks</h3>
-        <p className="text-sm font-extralight">
-          $ {pa.chargebacks?.toFixed(2)}
-        </p>
-        <h3 className="text-sm font-bold md:text-2xl">Materials & Labor</h3>
-        <p className="text-sm font-extralight">
-          $ {pa.material_and_labor?.toFixed(2)}
-        </p>
-        <h3 className="text-sm font-bold md:text-2xl">Material Safety</h3>
-        <p className="text-sm font-extralight">$ {pa.safety?.toFixed(2)}</p>
-        <h3 className="text-sm font-bold md:text-2xl">Freight Addition</h3>
-        <p className="text-sm font-extralight">
-          $ {pa.freight_and_overhead?.toFixed(2)}
-        </p>
-        <h3 className="text-sm font-bold md:text-2xl">Total Cost</h3>
-        <p className="text-sm font-extralight">$ {pa.total_cost?.toFixed(2)}</p>
-        <h3 className="text-sm font-bold md:text-2xl">Margin</h3>
-        <p className="text-sm font-extralight">{pa.margin?.toFixed(3)}%</p>
-      </div>
-    </div>
-  );
-};
