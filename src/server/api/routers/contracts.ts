@@ -46,7 +46,7 @@ const distributors: { [key: string]: number } = {
   "3349": 0.02, // thermofisher
 };
 
-const pricingAgreement = z.object({
+const pricingAgreementSchema = z.object({
   item: z.string(),
   price: z.number(),
   description: z.string().optional(),
@@ -61,13 +61,28 @@ const pricingAgreement = z.object({
   margin: z.number().optional(),
 });
 
+const costSchema = z.object({
+  item: z.string(),
+  alias: z.array(z.string()),
+  cost: z.number(),
+});
+
+const itemInfoSchema = z.object({
+  item: z.string(),
+  name: z.string(),
+  weight: z.number().optional(),
+  alias: z.array(z.string()).optional(),
+});
+
 const contractSchema = z.object({
   contractnumber: z.string(),
   contractname: z.string(),
   contractstart: z.date(),
   contractend: z.date(),
   customers: z.array(z.string()),
-  pricingagreements: z.array(pricingAgreement).optional(),
+  processed: z.boolean().optional(),
+  processed_last: z.date().optional(),
+  pricingagreements: z.array(pricingAgreementSchema).optional(),
   pendingchanges: z
     .array(
       z.object({
@@ -81,28 +96,12 @@ const contractSchema = z.object({
         total_cost: z.number().optional(),
         profit: z.number().optional(),
         margin: z.number().optional(),
-        previous: pricingAgreement.optional(),
+        previous: pricingAgreementSchema.optional(),
       })
     )
     .optional(),
-  costs: z
-    .array(
-      z.object({
-        item: z.string(),
-        alias: z.array(z.string()),
-        cost: z.number(),
-      })
-    )
-    .optional(),
-  items: z
-    .array(
-      z.object({
-        item: z.string(),
-        name: z.string(),
-        weight: z.number().optional(),
-      })
-    )
-    .optional(),
+  costs: z.array(costSchema).optional(),
+  items: z.array(itemInfoSchema).optional(),
   customer: z
     .object({
       contract_name: z.string(),
@@ -114,12 +113,29 @@ const contractSchema = z.object({
   distributor_fee: z.number().default(0.05),
   cash_discount_fee: z.number().default(0.0),
   gpo_fee: z.number().default(0.0),
-  labor_and_material_safety: z.number().default(0.1),
+  labor_and_material_safety: z.number().default(0.05),
 });
 
 export type Contract = z.infer<typeof contractSchema>;
+export type PricingAgreement = z.infer<typeof pricingAgreementSchema>;
+export type Cost = z.infer<typeof costSchema>;
+export type ItemInfo = z.infer<typeof itemInfoSchema>;
 
 export const contractRouter = createTRPCRouter({
+  set_processed_false: publicProcedure
+    .input(z.object({ contract: z.string().min(0) }))
+    .mutation(async ({ input }) => {
+      const client = await mongodb_atlas_connection();
+      const db = client.db("bussepricing");
+      const collection = db.collection("contract_prices");
+
+      await collection.findOneAndUpdate(
+        { contractnumber: input.contract },
+        { $set: { processed: false } }
+      );
+
+      return { success: true };
+    }),
   get_all_contracts: publicProcedure
     .input(z.object({ searchTerm: z.string() }))
     .query(async ({ input }) => {
@@ -215,6 +231,10 @@ export const contractRouter = createTRPCRouter({
 
       if (!_contract) return null;
 
+      if (_contract.processed) {
+        return _contract;
+      }
+
       const end_users: string[] = Array.from(
         new Set(
           _contract?.customers?.map((c) => {
@@ -236,28 +256,39 @@ export const contractRouter = createTRPCRouter({
       _contract.cash_discount_fee =
         _contract?.customer?.cash_discount_fee ?? 0.0;
       _contract.gpo_fee = _contract?.customer?.gpo_fee ?? 0.0;
-      _contract.labor_and_material_safety = 0.1;
+      _contract.labor_and_material_safety = 0.05;
 
       const _pricingagreements: Contract["pricingagreements"] = [];
 
       const error_missing_cost_data: Contract["pricingagreements"] = [];
       const error_missing_item_data: Contract["pricingagreements"] = [];
 
-      console.log({ _contract });
-
       if (_contract?.pricingagreements?.length === _contract?.costs?.length) {
-        _contract?.pricingagreements?.forEach((p, index) => {
-          const material_and_labor = _contract?.costs?.[index];
-          const item_data = _contract?.items?.[index];
+        _contract?.pricingagreements?.forEach((p) => {
+          const materials_and_labor =
+            _contract?.costs?.filter((c) => c.alias.includes(p.item)) ?? [];
 
-          if (!material_and_labor || !item_data) {
-            if (!material_and_labor) error_missing_cost_data.push(p);
-            if (!item_data) error_missing_item_data.push(p);
+          const items_data = _contract?.items?.filter?.((i: ItemInfo) =>
+            i?.alias?.includes(p.item)
+          );
+
+          if (!materials_and_labor || !items_data) {
+            if (!materials_and_labor) error_missing_cost_data.push(p);
+            if (!items_data) error_missing_item_data.push(p);
             return;
           }
 
+          if (items_data.length < 1 || materials_and_labor.length < 1) {
+            if (items_data.length < 1) error_missing_item_data.push(p);
+            if (materials_and_labor.length < 1) error_missing_cost_data.push(p);
+            return;
+          }
+
+          const material_and_labor = materials_and_labor[0] ?? ({} as Cost);
+          const item_data = items_data[0] ?? ({} as ItemInfo);
+
           // from item_data
-          p.description = item_data.name;
+          p.description = item_data?.name;
           p.weight = item_data.weight ?? 0;
 
           // from material_and_labor
@@ -326,6 +357,23 @@ export const contractRouter = createTRPCRouter({
       delete processedContract.items;
       delete processedContract.costs;
       delete processedContract.customer;
+
+      // update database and set processed to true with processed_last to today
+      await collection.updateOne(
+        { contractnumber: processedContract.contractnumber },
+        {
+          $set: {
+            processed: true,
+            processed_last: new Date(),
+            pricingagreements: processedContract.pricingagreements,
+            distributor_fee: processedContract.distributor_fee,
+            cash_discount_fee: processedContract.cash_discount_fee,
+            gpo_fee: processedContract.gpo_fee,
+            labor_and_material_safety:
+              processedContract.labor_and_material_safety,
+          },
+        }
+      );
 
       return processedContract;
     }),
