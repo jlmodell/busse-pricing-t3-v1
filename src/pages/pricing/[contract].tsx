@@ -20,7 +20,7 @@ const ContractPage: NextPage = () => {
   const handleSetProcessedFalse = () => {
     try {
       mutation.mutate({ contract: contract as string });
-      contract_query.refetch();
+      contract_query.refetch().catch(console.error);
     } catch (error) {
       console.error(error);
       alert(
